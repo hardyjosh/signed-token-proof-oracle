@@ -3,6 +3,7 @@ use ethers::prelude::*;
 use std::{sync::Arc, error::Error, f32::consts::E};
 use serde::Serialize;
 use ethers::utils::hex::ToHex;
+use actix_cors::Cors;
 
 const RPC_URL: &str = "https://eth.llamarpc.com";
 
@@ -30,7 +31,9 @@ async fn hello(path: web::Path<(String, String)>) -> web::Json<SignedBalance> {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {
+        let cors = Cors::default().allow_any_origin().send_wildcard();
         App::new()
+            .wrap(cors)
             .service(hello)
     })
     .bind(("127.0.0.1", 8080))?
