@@ -1,32 +1,38 @@
-use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, web, App, HttpServer};
 use ethers::prelude::*;
-use std::{sync::Arc, error::Error, f32::consts::E};
+use std::{sync::Arc, env};
 use serde::Serialize;
-use ethers::utils::hex::ToHex;
 use actix_cors::Cors;
-use std::{env, io};
 
 const RPC_URL: &str = "https://eth.llamarpc.com";
 
 #[derive(Serialize)]
 struct SignedBalance {
+    message: Vec<u8>,
     signature: Vec<u8>,
     signer_address: Vec<u8>,
+    token: Vec<u8>,
+    owner: Vec<u8>,
     balance: U256,
+    block: U64,
 }
 
 #[get("/{_token}/{_owner}")]
 async fn hello(path: web::Path<(String, String)>) -> web::Json<SignedBalance> {
-    // let block_number: U64 = get_block_number().await.unwrap();
-    // let token: Address = "0x6c6EE5e31d828De241282B9606C8e98Ea48526E2".parse().ok().unwrap();
+    let provider = Provider::<Http>::try_from(
+        RPC_URL
+    ).expect("could not instantiate HTTP Provider");
+
     let (_token, _owner) = path.into_inner();
     let token: Address = _token.parse().ok().unwrap();
     let owner: Address = _owner.parse().ok().unwrap();
-    // let owner: Address = "0x87b11cB8bf0052f1C9F6780D56102E4a1779db41".parse().ok().unwrap();
-    let balance: U256 = get_balance_of(token, owner).await.unwrap();
-    let signed_balance: SignedBalance = produce_signed_balance(balance).await.unwrap();
+    let balance: U256 = get_balance_of(provider.clone(), token, owner).await.unwrap();
+
+    let block_number: U64 = provider.get_block_number().await.unwrap();
+    
+    let signed_balance: SignedBalance = produce_signed_balance(token, owner, balance, block_number).await.unwrap();
+
     web::Json(signed_balance)
-    // HttpResponse::Ok().body(balance.to_string())
 }
 
 #[actix_web::main]
@@ -45,7 +51,7 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 
-async fn get_balance_of(token: Address, owner: Address) -> Result<U256, Box<dyn std::error::Error>>{
+async fn get_balance_of(provider: Provider::<Http>, token: Address, owner: Address) -> Result<U256, Box<dyn std::error::Error>>{
     // The abigen! macro expands the contract's code in the current scope
     // so that you can interface your Rust program with the blockchain
     // counterpart of the contract.
@@ -65,7 +71,6 @@ async fn get_balance_of(token: Address, owner: Address) -> Result<U256, Box<dyn 
 
     const RPC_URL: &str = "https://eth.llamarpc.com";
 
-    let provider = Provider::<Http>::try_from(RPC_URL)?;
     let client = Arc::new(provider);
     let contract = IERC20::new(token, client);
 
@@ -75,21 +80,44 @@ async fn get_balance_of(token: Address, owner: Address) -> Result<U256, Box<dyn 
         // return an error here
         return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "")));
     }
-    // return contract.total_supply().call().await;
 }
 
-async fn produce_signed_balance(balance: U256) -> Result<SignedBalance, Box<dyn std::error::Error>>{
+async fn produce_signed_balance(token: Address, owner: Address, balance: U256, block: U64) -> Result<SignedBalance, Box<dyn std::error::Error>>{
     let wallet: LocalWallet = "380eb0f3d505f087e438eca80bc4df9a7faa24f868e69fc0440261a0fc0567dc"
     .parse()?;
-    let mut bytes = [0u8; 32];
-    balance.to_big_endian(&mut bytes);
 
-    let hash = ethers::utils::keccak256(&bytes);
+    // Converting balance into [u8; 32]
+    let mut balance_bytes = [0u8; 32];
+    balance.to_big_endian(&mut balance_bytes);
+
+    // Converting block into [u8; 8]
+    let mut block_bytes = [0u8; 8];
+    block.to_big_endian(&mut block_bytes);
+
+    // Converting token into [u8; 20]
+    let token_bytes= token.as_bytes();
+
+    // Converting owner into [u8; 20]
+    let owner_bytes= owner.as_bytes();
+
+    // Concatenating all together
+    let mut result: Vec<u8> = Vec::with_capacity(80); // Pre-allocating exact size
+    result.extend_from_slice(&token_bytes);
+    result.extend_from_slice(&owner_bytes);
+    result.extend_from_slice(&balance_bytes);
+    result.extend_from_slice(&block_bytes);
+
+
+    let hash = ethers::utils::keccak256(result.as_slice());
 
     let signature = wallet.sign_message(hash).await.ok().unwrap();
     let signature_bytes = signature.to_vec();
 
     return Ok(SignedBalance {
+        message: result,
+        token: token.as_bytes().to_vec(),
+        owner: owner.as_bytes().to_vec(),
+        block: block,
         signature: signature_bytes,
         signer_address: wallet.address().as_bytes().to_vec(),
         balance: balance,
