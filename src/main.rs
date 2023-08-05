@@ -4,8 +4,6 @@ use std::{sync::Arc, env};
 use serde::Serialize;
 use actix_cors::Cors;
 
-const RPC_URL: &str = "https://eth.llamarpc.com";
-
 #[derive(Serialize)]
 struct SignedBalance {
     message: Vec<u8>,
@@ -17,19 +15,15 @@ struct SignedBalance {
     block: U64,
 }
 
-#[get("/{_token}/{_owner}")]
-async fn hello(path: web::Path<(String, String)>) -> web::Json<SignedBalance> {
-    let provider = Provider::<Http>::try_from(
-        RPC_URL
-    ).expect("could not instantiate HTTP Provider");
-
-    let (_token, _owner) = path.into_inner();
+#[get("{_chain}/{_token}/{_owner}")]
+async fn hello(path: web::Path<(u32, String, String)>) -> web::Json<SignedBalance> {
+    let (_chain, _token, _owner) = path.into_inner();
     let token: Address = _token.parse().ok().unwrap();
     let owner: Address = _owner.parse().ok().unwrap();
-    let balance: U256 = get_balance_of(provider.clone(), token, owner).await.unwrap();
+    let provider = get_provider(_chain).unwrap();
 
+    let balance: U256 = get_balance_of(provider.clone(), token, owner).await.unwrap();
     let block_number: U64 = provider.get_block_number().await.unwrap();
-    
     let signed_balance: SignedBalance = produce_signed_balance(token, owner, balance, block_number).await.unwrap();
 
     web::Json(signed_balance)
@@ -51,6 +45,26 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 
+fn get_provider(chain: u32) -> Result<Provider::<Http>, Box<dyn std::error::Error>> {
+    let rpc_url = match chain {
+        1 => "https://eth.llamarpc.com",
+        5 => "https://goerli-rpc.linkpool.io",
+        137 => "hhttps://polygon.llamarpc.com",
+        80001 => "https://rpc-mumbai.maticvigil.com",
+        _ => {
+            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Invalid chain")));
+        }
+    };
+
+    if let Ok(provider) = Provider::<Http>::try_from(
+        rpc_url
+    ) {
+        return Ok(provider);
+    } else {
+        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Couldn't parse provider")));
+    }
+}
+
 async fn get_balance_of(provider: Provider::<Http>, token: Address, owner: Address) -> Result<U256, Box<dyn std::error::Error>>{
     // The abigen! macro expands the contract's code in the current scope
     // so that you can interface your Rust program with the blockchain
@@ -68,8 +82,6 @@ async fn get_balance_of(provider: Provider::<Http>, token: Address, owner: Addre
             event Approval(address indexed owner, address indexed spender, uint256 value)
         ]"#,
     );
-
-    const RPC_URL: &str = "https://eth.llamarpc.com";
 
     let client = Arc::new(provider);
     let contract = IERC20::new(token, client);
